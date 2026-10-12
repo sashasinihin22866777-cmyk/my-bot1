@@ -337,10 +337,11 @@ def nick_tg(uid):
 
 
 def admin_pseudo(uid):
+    """Псевдоним админа в формате (#ник)."""
     nick = db.get_user(uid)["nickname"]
     if nick:
-        return f"#{nick}"
-    return "#Администратор"
+        return f"(#{nick})"
+    return "(#Администратор)"
 
 
 def safe_username(uid):
@@ -526,7 +527,7 @@ def cmd_help(message):
         text += "/setwelcome <текст>\n"
         text += "/setrules <текст>\n"
         text += "/setinfo <текст>\n"
-        text += "/setgwelcome <текст> — приветствие админов\n"
+        text += "/setgwelcome <текст>\n"
         text += "/clearwarns @user\n"
         text += "/broadcast <текст>\n"
         text += "/logs [N]\n\n"
@@ -801,10 +802,11 @@ def cb_take(call):
     kb_user.add(types.InlineKeyboardButton("🔚 Закрыть диалог", callback_data="user_close"))
     send_to_user(
         target,
-        "✅ <b>Администратор принял вас</b>\n"
-        "━━━━━━━━━━━━━━━━━━\n"
-        "💬 Пишите сообщения — они уйдут администратору анонимно.\n\n"
-        "<i>Нажмите кнопку ниже, чтобы завершить диалог.</i>",
+        f"✅ <b>Администратор принял вас</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"👮 <b>Ваш администратор:</b> {admin_pseudo(admin_uid)}\n"
+        f"💬 Пишите сообщения — они уйдут администратору анонимно.\n\n"
+        f"<i>Нажмите кнопку ниже, чтобы завершить диалог.</i>",
         kb=kb_user)
     bot.answer_callback_query(call.id, "Принято")
 
@@ -1000,18 +1002,13 @@ def cmd_setrole(message):
                 "❌ <b>Укажите цель</b>\n"
                 "━━━━━━━━━━━━━━━━━━\n"
                 "• reply на сообщение юзера: <code>/setrole 1 #ник</code>\n"
-                "• по ID: <code>/setrole 123456789 1 #ник</code>\n"
-                "• по @username (если юзер писал боту)")
+                "• по ID: <code>/setrole 123456789 1 #ник</code>")
         target = resolve_user(message, parts[0])
         if not target:
             return bot.reply_to(message,
                 "❌ <b>Пользователь не найден</b>\n"
                 "━━━━━━━━━━━━━━━━━━\n"
-                "Бот не может найти юзера по @username, если тот "
-                "не писал боту.\n\n"
-                "<b>Используйте:</b>\n"
-                "• <b>reply</b> на сообщение: <code>/setrole 1 #ник</code>\n"
-                "• по <b>ID</b>: <code>/setrole 123456789 1 #ник</code>")
+                "Используйте <b>reply</b> или <b>ID</b>.")
         if len(parts) < 2:
             return bot.reply_to(message, "Выберите номер ранга (1-8) или 100\nИнформация: /ranks")
         try:
@@ -1798,7 +1795,7 @@ def handle_messages(message):
                 pass
             return
 
-        # Есть тикет — пересылаем
+        # Есть тикет — пересылаем ТОЛЬКО в группу поддержки
         try:
             header = bot.send_message(
                 Config.SUPPORT_GROUP,
@@ -1808,29 +1805,8 @@ def handle_messages(message):
                 f"👮 <b>Администратор:</b> {admin_pseudo(admin_id)}")
             bot.copy_message(Config.SUPPORT_GROUP, chat, message.message_id)
             db.save_reply(header.message_id, uid)
-
-            kb_admin = types.InlineKeyboardMarkup()
-            kb_admin.add(types.InlineKeyboardButton(
-                "🔚 Закрыть диалог", callback_data=f"close_{uid}"))
-            bot.send_message(admin_id,
-                f"📩 <b>Новое сообщение от пользователя</b>\n"
-                f"━━━━━━━━━━━━━━━━━━\n"
-                f"👤 {nick_tg(uid)} | <code>{uid}</code>")
-            bot.copy_message(admin_id, chat, message.message_id)
-            try:
-                bot.send_message(admin_id, "👇 Управление:", reply_markup=kb_admin)
-            except Exception:
-                pass
-
-            kb_user = types.InlineKeyboardMarkup()
-            kb_user.add(types.InlineKeyboardButton(
-                "🔚 Закрыть диалог", callback_data="user_close"))
-            try:
-                bot.send_message(uid, "👇 Управление диалогом:", reply_markup=kb_user)
-            except Exception:
-                pass
         except Exception as e:
-            print(f"[forward] {e}")
+            print(f"[forward group] {e}")
 
 
 # ══════════════════════════════════════════════════════
