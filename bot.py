@@ -24,7 +24,7 @@ class Config:
     DEVELOPER_ID = 963549015
     SUPPORT_GROUP = -1004471681505
     CLAIMS_GROUP = -1004311016312
-    COMMANDS_GROUP = -1004436484199
+    COMMANDS_GROUP = -1004471681505
     DB_PATH = "/tmp/secretary.db"
 
     MIN_SETROLE = 5
@@ -44,6 +44,8 @@ class Config:
     MIN_NOTE = 5
     MIN_LOGS = 8
     MIN_BROADCAST = 8
+    MIN_BOTSTATS = 8
+    MIN_SETPERM = 8
 
     APPEAL_COOLDOWN = 24 * 3600
     FLOOD_INTERVAL = 2
@@ -139,6 +141,10 @@ class Storage:
                     details TEXT,
                     date TEXT
                 );
+                CREATE TABLE IF NOT EXISTS command_perms (
+                    command TEXT PRIMARY KEY,
+                    min_rank INTEGER
+                );
             """)
             c.execute("INSERT OR IGNORE INTO settings VALUES('welcome', '👋 Добро пожаловать!')")
             c.execute("INSERT OR IGNORE INTO settings VALUES('rules', '📜 Правила бота пока не установлены.')")
@@ -146,6 +152,29 @@ class Storage:
             c.execute("INSERT OR IGNORE INTO settings VALUES('gwelcome', '🖤 Добро пожаловать в обитель теней, {name}!')")
             c.execute("INSERT OR IGNORE INTO users(user_id, rank, nickname) VALUES(?, ?, ?)",
                       (Config.DEVELOPER_ID, 100, 'Разработчик'))
+
+            defaults = {
+                "setrole": Config.MIN_SETROLE,
+                "removerole": Config.MIN_REMOVEROLE,
+                "ban": Config.MIN_BAN,
+                "unban": Config.MIN_UNBAN,
+                "warn": Config.MIN_WARN,
+                "unwarn": Config.MIN_UNWARN,
+                "pban": Config.MIN_PBAN,
+                "punban": Config.MIN_PUNBAN,
+                "take": Config.MIN_TAKE,
+                "check": Config.MIN_CHECK,
+                "ranks": Config.MIN_RANKS,
+                "appeal_decide": Config.MIN_APPEAL_DECIDE,
+                "setwelcome": Config.MIN_SETWELCOME,
+                "answer": Config.MIN_ANSWER,
+                "note": Config.MIN_NOTE,
+                "logs": Config.MIN_LOGS,
+                "broadcast": Config.MIN_BROADCAST,
+                "botstats": Config.MIN_BOTSTATS,
+            }
+            for cmd, rank in defaults.items():
+                c.execute("INSERT OR IGNORE INTO command_perms VALUES(?, ?)", (cmd, rank))
             self.conn.commit()
 
     def _exec(self, sql, params=(), fetch=None):
@@ -289,6 +318,61 @@ class Storage:
 
     def get_all_users(self):
         return self._exec("SELECT user_id FROM users", fetch="all") or []
+
+    def get_stats(self):
+        with self.lock:
+            cur = self.conn.cursor()
+            cur.execute("SELECT COUNT(*) as cnt FROM users")
+            total = cur.fetchone()["cnt"]
+
+            cur.execute("SELECT COUNT(*) as cnt FROM users WHERE rank >= 1")
+            admins = cur.fetchone()["cnt"]
+
+            cur.execute("SELECT COUNT(*) as cnt FROM users WHERE rank = 0")
+            users_only = cur.fetchone()["cnt"]
+
+            cur.execute("SELECT COUNT(*) as cnt FROM bans WHERE until = -1 OR until > ?",
+                        (int(time.time()),))
+            banned = cur.fetchone()["cnt"]
+
+            cur.execute("SELECT COUNT(*) as cnt FROM appeals")
+            appeals = cur.fetchone()["cnt"]
+
+            cur.execute("SELECT COUNT(*) as cnt FROM users WHERE messages > 0")
+            active = cur.fetchone()["cnt"]
+
+            cur.execute("SELECT SUM(messages) as s FROM users")
+            total_messages = cur.fetchone()["s"] or 0
+
+            cur.execute("SELECT SUM(warns) as s FROM users")
+            total_warns = cur.fetchone()["s"] or 0
+
+        return {
+            "total": total,
+            "admins": admins,
+            "users_only": users_only,
+            "banned": banned,
+            "appeals": appeals,
+            "active": active,
+            "total_messages": total_messages,
+            "total_warns": total_warns,
+        }
+
+    # ── command_perms ──
+    def set_perm(self, command, min_rank):
+        self._exec("REPLACE INTO command_perms VALUES(?, ?)", (command, int(min_rank)))
+
+    def get_perm(self, command, default=8):
+        row = self._exec("SELECT min_rank FROM command_perms WHERE command=?",
+                         (command,), "one")
+        return row["min_rank"] if row else default
+
+    def get_all_perms(self):
+        return self._exec("SELECT * FROM command_perms ORDER BY min_rank, command",
+                          fetch="all") or []
+
+    def delete_perm(self, command):
+        self._exec("DELETE FROM command_perms WHERE command=?", (command,))
 
 
 # ══════════════════════════════════════════════════════
@@ -435,7 +519,7 @@ def send_to_user(uid, text, kb=None):
         return False
 
 
-def create_new_user_post(uid, category, gender):
+def create_new_user_post(uid, category):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         types.InlineKeyboardButton("✅ Взять", callback_data=f"take_{uid}"),
@@ -446,7 +530,6 @@ def create_new_user_post(uid, category, gender):
         f"━━━━━━━━━━━━━━━━━━\n"
         f"👤 <b>Никнейм:</b> {nick_tg(uid)}\n"
         f"📂 <b>Категория:</b> {category}\n"
-        f"🚻 <b>Пол:</b> {gender}\n"
         f"🆔 <code>{uid}</code>"
     )
     try:
@@ -500,13 +583,13 @@ def cmd_help(message):
     text += "/rules — правила\n"
     text += "/info — о боте\n\n"
 
-    if r >= Config.MIN_RANKS:
+    if r >= db.get_perm("ranks", Config.MIN_RANKS):
         text += "<b>🛠 Ранг 1+:</b>\n"
         text += "/ranks — список рангов\n"
         text += "/check — инфо о юзере (reply)\n"
         text += "/top — топ юзеров\n\n"
 
-    if r >= Config.MIN_SETROLE:
+    if r >= db.get_perm("setrole", Config.MIN_SETROLE):
         text += "<b>🧑‍💼 Ранг 5+:</b>\n"
         text += "/setrole @user N #ник\n"
         text += "/removerole @user\n"
@@ -519,7 +602,7 @@ def cmd_help(message):
         text += "/dialogs / /dialog @user\n"
         text += "/note @user [текст] / /notes @user\n\n"
 
-    if r >= Config.MIN_PBAN:
+    if r >= db.get_perm("pban", Config.MIN_PBAN):
         text += "<b>👑 Ранг 8+:</b>\n"
         text += "/unban @user\n"
         text += "/pban / /punban @user\n"
@@ -529,7 +612,9 @@ def cmd_help(message):
         text += "/setgwelcome [текст]\n"
         text += "/clearwarns @user\n"
         text += "/broadcast [текст]\n"
-        text += "/logs [N]\n\n"
+        text += "/logs [N]\n"
+        text += "/botstats — статистика\n"
+        text += "/setperm — права команд\n\n"
 
     if r >= 100:
         text += "<b>⚙️ Разработчик:</b>\n"
@@ -537,6 +622,95 @@ def cmd_help(message):
         text += "/cleardialogs\n"
 
     bot.reply_to(message, text)
+
+
+# ══════════════════════════════════════════════════════
+# /botstats
+# ══════════════════════════════════════════════════════
+@bot.message_handler(commands=["botstats"])
+def cmd_botstats(message):
+    if rank_of(message.from_user.id) < db.get_perm("botstats", Config.MIN_BOTSTATS):
+        return bot.reply_to(message, "❌ Недостаточно прав!")
+
+    s = db.get_stats()
+    me = bot.get_me()
+
+    text = (
+        f"📊 <b>Статистика бота</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🤖 <b>Бот:</b> @{me.username}\n"
+        f"🆔 <b>ID:</b> <code>{me.id}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"👥 <b>Всего пользователей:</b> {s['total']}\n"
+        f"👤 <b>Из них обычных:</b> {s['users_only']}\n"
+        f"👮 <b>Администраторов:</b> {s['admins']}\n"
+        f"🟢 <b>Активных:</b> {s['active']}\n"
+        f"🚫 <b>Забанено:</b> {s['banned']}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📩 <b>Всего обжалований:</b> {s['appeals']}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"✉️ <b>Всего сообщений:</b> {s['total_messages']}\n"
+        f"⚠️ <b>Всего варнов:</b> {s['total_warns']}"
+    )
+    bot.reply_to(message, text)
+
+
+# ══════════════════════════════════════════════════════
+# /setperm — права команд (8+)
+# ══════════════════════════════════════════════════════
+@bot.message_handler(commands=["setperm"])
+def cmd_setperm(message):
+    if rank_of(message.from_user.id) < Config.MIN_SETPERM:
+        return bot.reply_to(message, "❌ Недостаточно прав! (нужен ранг 8+)")
+
+    parts = message.text.split()
+    if len(parts) < 2:
+        return bot.reply_to(message,
+            "⚙️ <b>Управление правами команд</b>\n"
+            "━━━━━━━━━━━━━━━━━━\n"
+            "<code>/setperm [команда] [ранг]</code>\n"
+            "<code>/setperm [команда] reset</code>\n"
+            "<code>/setperm list</code>\n\n"
+            "<b>Примеры:</b>\n"
+            "<code>/setperm ban 7</code> — бан с 7 ранга\n"
+            "<code>/setperm mute 3</code> — мут с 3 ранга\n"
+            "<code>/setperm botstats 5</code> — статистика с 5 ранга")
+
+    if parts[1] == "list":
+        rows = db.get_all_perms()
+        if not rows:
+            return bot.reply_to(message, "📭 Настроек нет")
+        text = "⚙️ <b>Права команд</b>\n━━━━━━━━━━━━━━━━━━\n"
+        for r in rows:
+            text += f"/{r['command']} — от {r['min_rank']} ранга\n"
+        return bot.reply_to(message, text)
+
+    command = parts[1].lstrip("/").lower()
+
+    if len(parts) < 3:
+        return bot.reply_to(message, "Укажите ранг или reset")
+
+    if parts[2] == "reset":
+        db.delete_perm(command)
+        db.add_log("setperm_reset", message.from_user.id, details=command)
+        return bot.reply_to(message, f"✅ Права для /{command} сброшены")
+
+    try:
+        rank = int(parts[2])
+    except ValueError:
+        return bot.reply_to(message, "❌ Ранг должен быть числом (0–100)")
+
+    if not (0 <= rank <= 100):
+        return bot.reply_to(message, "❌ Ранг 0–100")
+
+    db.set_perm(command, rank)
+    db.add_log("setperm", message.from_user.id, details=f"{command} -> {rank}")
+
+    bot.reply_to(message,
+        f"✅ <b>Права изменены</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"⚙️ <b>Команда:</b> /{command}\n"
+        f"🎖 <b>Ранг:</b> {rank}+")
 
 
 # ══════════════════════════════════════════════════════
@@ -550,7 +724,7 @@ def cmd_rules(message):
 
 @bot.message_handler(commands=["setrules"])
 def cmd_setrules(message):
-    if not check_access(message, Config.MIN_SETWELCOME):
+    if not check_access(message, db.get_perm("setwelcome", Config.MIN_SETWELCOME)):
         return
     text = message.text.partition(" ")[2].strip()
     if not text:
@@ -568,7 +742,7 @@ def cmd_info(message):
 
 @bot.message_handler(commands=["setinfo"])
 def cmd_setinfo(message):
-    if not check_access(message, Config.MIN_SETWELCOME):
+    if not check_access(message, db.get_perm("setwelcome", Config.MIN_SETWELCOME)):
         return
     text = message.text.partition(" ")[2].strip()
     if not text:
@@ -580,7 +754,7 @@ def cmd_setinfo(message):
 
 @bot.message_handler(commands=["setgwelcome"])
 def cmd_setgwelcome(message):
-    if not check_access(message, Config.MIN_SETWELCOME):
+    if not check_access(message, db.get_perm("setwelcome", Config.MIN_SETWELCOME)):
         return
     text = message.text.partition(" ")[2].strip()
     if not text:
@@ -604,7 +778,7 @@ def cmd_close(message):
     uid = message.from_user.id
 
     if chat == Config.SUPPORT_GROUP and message.reply_to_message:
-        if rank_of(uid) < Config.MIN_ANSWER:
+        if rank_of(uid) < db.get_perm("answer", Config.MIN_ANSWER):
             return bot.reply_to(message, "❌ Недостаточно прав!")
         rt = message.reply_to_message
         target = db.get_reply_user(rt.message_id)
@@ -731,19 +905,6 @@ def cb_call_admin(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("cat_"))
 def cb_category(call):
     category = call.data.split("_", 1)[1]
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(
-        types.InlineKeyboardButton("🖤 Мальчик", callback_data=f"gen_{category}_Мальчик"),
-        types.InlineKeyboardButton("❤️ Девочка", callback_data=f"gen_{category}_Девочка"),
-    )
-    bot.edit_message_text("🚻 <b>Выберите пол администратора</b>",
-                          call.message.chat.id, call.message.message_id,
-                          reply_markup=kb)
-
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("gen_"))
-def cb_gender(call):
-    _, category, gender = call.data.split("_", 2)
     uid = call.from_user.id
 
     if db.get_ticket(uid):
@@ -756,7 +917,7 @@ def cb_gender(call):
         "━━━━━━━━━━━━━━━━━━\n"
         "Ожидайте.",
         call.message.chat.id, call.message.message_id)
-    create_new_user_post(uid, category, gender)
+    create_new_user_post(uid, category)
 
 
 # ══════════════════════════════════════════════════════
@@ -765,7 +926,7 @@ def cb_gender(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("take_"))
 def cb_take(call):
     admin_uid = call.from_user.id
-    if rank_of(admin_uid) < Config.MIN_TAKE:
+    if rank_of(admin_uid) < db.get_perm("take", Config.MIN_TAKE):
         return bot.answer_callback_query(call.id, "❌ Недостаточно прав!", show_alert=True)
     try:
         target = int(call.data.split("_", 1)[1])
@@ -811,7 +972,7 @@ def cb_take(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("refuse_"))
 def cb_refuse(call):
     admin_uid = call.from_user.id
-    if rank_of(admin_uid) < Config.MIN_TAKE:
+    if rank_of(admin_uid) < db.get_perm("take", Config.MIN_TAKE):
         return bot.answer_callback_query(call.id, "❌ Недостаточно прав!", show_alert=True)
     try:
         target = int(call.data.split("_", 1)[1])
@@ -847,7 +1008,7 @@ def cb_refuse(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("close_"))
 def cb_close_admin(call):
     uid = call.from_user.id
-    if rank_of(uid) < Config.MIN_ANSWER:
+    if rank_of(uid) < db.get_perm("answer", Config.MIN_ANSWER):
         return bot.answer_callback_query(call.id, "❌ Недостаточно прав!", show_alert=True)
     try:
         target = int(call.data.split("_", 1)[1])
@@ -960,7 +1121,7 @@ def cmd_stats(message):
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["ranks"])
 def cmd_ranks(message):
-    if not check_access(message, Config.MIN_RANKS):
+    if not check_access(message, db.get_perm("ranks", Config.MIN_RANKS)):
         return
     text = "📊 <b>Список рангов</b>\n━━━━━━━━━━━━━━━━━━\n"
     for i in range(1, 9):
@@ -975,7 +1136,7 @@ def cmd_ranks(message):
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["setrole"])
 def cmd_setrole(message):
-    if not check_access(message, Config.MIN_SETROLE):
+    if not check_access(message, db.get_perm("setrole", Config.MIN_SETROLE)):
         return
 
     text = message.text.partition(" ")[2].strip()
@@ -1050,7 +1211,7 @@ def cmd_setrole(message):
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["removerole"])
 def cmd_removerole(message):
-    if not check_access(message, Config.MIN_REMOVEROLE):
+    if not check_access(message, db.get_perm("removerole", Config.MIN_REMOVEROLE)):
         return
     arg = message.text.partition(" ")[2].strip()
     target = resolve_user(message, arg)
@@ -1077,7 +1238,7 @@ def cmd_removerole(message):
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["check"])
 def cmd_check(message):
-    if not check_access(message, Config.MIN_CHECK):
+    if not check_access(message, db.get_perm("check", Config.MIN_CHECK)):
         return
     if not message.reply_to_message:
         return bot.reply_to(message, "Ответьте этой командой на сообщение пользователя")
@@ -1121,7 +1282,7 @@ def cmd_setowner(message):
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["ban"])
 def cmd_ban(message):
-    if not check_access(message, Config.MIN_BAN):
+    if not check_access(message, db.get_perm("ban", Config.MIN_BAN)):
         return
 
     text = message.text.partition(" ")[2].strip()
@@ -1177,7 +1338,7 @@ def cmd_ban(message):
 
 @bot.message_handler(commands=["unban"])
 def cmd_unban(message):
-    if not check_access(message, Config.MIN_UNBAN):
+    if not check_access(message, db.get_perm("unban", Config.MIN_UNBAN)):
         return
     target = resolve_user(message, message.text.partition(" ")[2].strip())
     if not target:
@@ -1201,7 +1362,7 @@ def cmd_unban(message):
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["warn"])
 def cmd_warn(message):
-    if not check_access(message, Config.MIN_WARN):
+    if not check_access(message, db.get_perm("warn", Config.MIN_WARN)):
         return
     target = resolve_user(message, message.text.partition(" ")[2].strip())
     if not target:
@@ -1239,7 +1400,7 @@ def cmd_warn(message):
 
 @bot.message_handler(commands=["unwarn"])
 def cmd_unwarn(message):
-    if not check_access(message, Config.MIN_UNWARN):
+    if not check_access(message, db.get_perm("unwarn", Config.MIN_UNWARN)):
         return
     target = resolve_user(message, message.text.partition(" ")[2].strip())
     if not target:
@@ -1259,7 +1420,7 @@ def cmd_unwarn(message):
 
 @bot.message_handler(commands=["clearwarns"])
 def cmd_clearwarns(message):
-    if not check_access(message, Config.MIN_PBAN):
+    if not check_access(message, db.get_perm("pban", Config.MIN_PBAN)):
         return
     target = resolve_user(message, message.text.partition(" ")[2].strip())
     if not target:
@@ -1279,7 +1440,7 @@ def cmd_clearwarns(message):
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["kick"])
 def cmd_kick(message):
-    if not check_access(message, Config.MIN_SETROLE):
+    if not check_access(message, db.get_perm("setrole", Config.MIN_SETROLE)):
         return
     target = resolve_user(message, message.text.partition(" ")[2].strip())
     if not target:
@@ -1304,7 +1465,7 @@ def cmd_kick(message):
 
 @bot.message_handler(commands=["mute"])
 def cmd_mute(message):
-    if not check_access(message, Config.MIN_SETROLE):
+    if not check_access(message, db.get_perm("setrole", Config.MIN_SETROLE)):
         return
     text = message.text.partition(" ")[2].strip()
     parts = text.split()
@@ -1331,7 +1492,7 @@ def cmd_mute(message):
 
 @bot.message_handler(commands=["unmute"])
 def cmd_unmute(message):
-    if not check_access(message, Config.MIN_SETROLE):
+    if not check_access(message, db.get_perm("setrole", Config.MIN_SETROLE)):
         return
     target = resolve_user(message, message.text.partition(" ")[2].strip())
     if not target:
@@ -1355,7 +1516,7 @@ def cmd_unmute(message):
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["dialogs"])
 def cmd_dialogs(message):
-    if not check_access(message, Config.MIN_SETROLE):
+    if not check_access(message, db.get_perm("setrole", Config.MIN_SETROLE)):
         return
     rows = db.get_all_tickets()
     if not rows:
@@ -1376,7 +1537,7 @@ def cmd_dialogs(message):
 
 @bot.message_handler(commands=["dialog"])
 def cmd_dialog(message):
-    if not check_access(message, Config.MIN_SETROLE):
+    if not check_access(message, db.get_perm("setrole", Config.MIN_SETROLE)):
         return
     target = resolve_user(message, message.text.partition(" ")[2].strip())
     if not target:
@@ -1408,7 +1569,7 @@ def cmd_cleardialogs(message):
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["pban"])
 def cmd_pban(message):
-    if not check_access(message, Config.MIN_PBAN):
+    if not check_access(message, db.get_perm("pban", Config.MIN_PBAN)):
         return
     target = resolve_user(message, message.text.partition(" ")[2].strip())
     if not target:
@@ -1424,7 +1585,7 @@ def cmd_pban(message):
 
 @bot.message_handler(commands=["punban"])
 def cmd_punban(message):
-    if not check_access(message, Config.MIN_PUNBAN):
+    if not check_access(message, db.get_perm("punban", Config.MIN_PUNBAN)):
         return
     target = resolve_user(message, message.text.partition(" ")[2].strip())
     if not target:
@@ -1443,7 +1604,7 @@ def cmd_punban(message):
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["setwelcome"])
 def cmd_setwelcome(message):
-    if not check_access(message, Config.MIN_SETWELCOME):
+    if not check_access(message, db.get_perm("setwelcome", Config.MIN_SETWELCOME)):
         return
     text = message.text.partition(" ")[2].strip()
     if not text:
@@ -1458,7 +1619,7 @@ def cmd_setwelcome(message):
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["note"])
 def cmd_note(message):
-    if not check_access(message, Config.MIN_NOTE):
+    if not check_access(message, db.get_perm("note", Config.MIN_NOTE)):
         return
     text = message.text.partition(" ")[2].strip()
     parts = text.split(maxsplit=1)
@@ -1476,7 +1637,7 @@ def cmd_note(message):
 
 @bot.message_handler(commands=["notes"])
 def cmd_notes(message):
-    if not check_access(message, Config.MIN_NOTE):
+    if not check_access(message, db.get_perm("note", Config.MIN_NOTE)):
         return
     target = resolve_user(message, message.text.partition(" ")[2].strip())
     if not target:
@@ -1492,7 +1653,7 @@ def cmd_notes(message):
 
 @bot.message_handler(commands=["clearnotes"])
 def cmd_clearnotes(message):
-    if not check_access(message, Config.MIN_PBAN):
+    if not check_access(message, db.get_perm("pban", Config.MIN_PBAN)):
         return
     target = resolve_user(message, message.text.partition(" ")[2].strip())
     if not target:
@@ -1507,7 +1668,7 @@ def cmd_clearnotes(message):
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["top"])
 def cmd_top(message):
-    if not check_access(message, Config.MIN_RANKS):
+    if not check_access(message, db.get_perm("ranks", Config.MIN_RANKS)):
         return
     rows = db.get_top_users(10)
     if not rows:
@@ -1519,12 +1680,12 @@ def cmd_top(message):
 
 
 # ══════════════════════════════════════════════════════
-# /logs (8+)
+# /logs
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["logs"])
 def cmd_logs(message):
-    if rank_of(message.from_user.id) < Config.MIN_LOGS:
-        return bot.reply_to(message, "❌ Недостаточно прав! (нужен ранг 8+)")
+    if rank_of(message.from_user.id) < db.get_perm("logs", Config.MIN_LOGS):
+        return bot.reply_to(message, "❌ Недостаточно прав!")
     parts = message.text.split()
     limit = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 10
     limit = min(limit, 50)
@@ -1543,12 +1704,12 @@ def cmd_logs(message):
 
 
 # ══════════════════════════════════════════════════════
-# /broadcast (8+)
+# /broadcast
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["broadcast"])
 def cmd_broadcast(message):
-    if rank_of(message.from_user.id) < Config.MIN_BROADCAST:
-        return bot.reply_to(message, "❌ Недостаточно прав! (нужен ранг 8+)")
+    if rank_of(message.from_user.id) < db.get_perm("broadcast", Config.MIN_BROADCAST):
+        return bot.reply_to(message, "❌ Недостаточно прав!")
     text = message.text.partition(" ")[2].strip()
     if not text:
         return bot.reply_to(message, "Формат: /broadcast [текст]")
@@ -1667,7 +1828,7 @@ def appeal_step(message):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("ap_ok_") or c.data.startswith("ap_no_"))
 def cb_appeal_decide(call):
-    if rank_of(call.from_user.id) < Config.MIN_APPEAL_DECIDE:
+    if rank_of(call.from_user.id) < db.get_perm("appeal_decide", Config.MIN_APPEAL_DECIDE):
         return bot.answer_callback_query(call.id, "❌ Недостаточно прав!", show_alert=True)
 
     action, aid = call.data.split("_")[1], int(call.data.split("_")[2])
@@ -1722,9 +1883,6 @@ def handle_messages(message):
     chat = message.chat.id
     uid = message.from_user.id
 
-    if chat == Config.COMMANDS_GROUP:
-        return
-
     if message.text and message.text.startswith("/"):
         return
 
@@ -1733,7 +1891,7 @@ def handle_messages(message):
         target_user = db.get_reply_user(rt.message_id)
         if not target_user:
             return
-        if rank_of(uid) < Config.MIN_ANSWER:
+        if rank_of(uid) < db.get_perm("answer", Config.MIN_ANSWER):
             return bot.reply_to(message, "❌ Недостаточно прав!")
 
         try:
