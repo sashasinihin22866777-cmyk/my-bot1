@@ -610,7 +610,7 @@ def cmd_close(message):
         if rank_of(uid) < Config.MIN_ANSWER:
             return bot.reply_to(message, "❌ Недостаточно прав!")
         rt = message.reply_to_message
-        target = db.get_reply_user(rt.message_id) if rt.from_user.id == bot.get_me().id else rt.from_user.id
+        target = db.get_reply_user(rt.message_id)
         if not target:
             return bot.reply_to(message, "❌ Не удалось определить пользователя")
         if not db.get_ticket(target):
@@ -813,8 +813,7 @@ def cb_take(call):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("refuse_"))
 def cb_refuse(call):
-    admin_uid = call.from_user.id
-    if rank_of(admin_uid) < Config.MIN_TAKE:
+    admin_uid = call.from_user.id    if rank_of(admin_uid) < Config.MIN_TAKE:
         return bot.answer_callback_query(call.id, "❌ Недостаточно прав!", show_alert=True)
     try:
         target = int(call.data.split("_", 1)[1])
@@ -1085,9 +1084,9 @@ def cmd_check(message):
         return
     if not message.reply_to_message:
         return bot.reply_to(message, "Ответьте этой командой на сообщение пользователя")
-    target = resolve_user(message, "")
+    target = db.get_reply_user(message.reply_to_message.message_id)
     if not target:
-        return bot.reply_to(message, "❌ Не удалось определить пользователя")
+        target = message.reply_to_message.from_user.id
     bot.reply_to(message,
         f"🔍 <b>Информация</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
@@ -1729,11 +1728,13 @@ def handle_messages(message):
     if chat == Config.COMMANDS_GROUP:
         return
 
-    # Группа поддержки: reply ТОЛЬКО на сообщение бота → юзеру
+    # Пропускаем команды — их обрабатывают отдельные хендлеры
+    if message.text and message.text.startswith("/"):
+        return
+
+    # Группа поддержки: reply админа → юзеру
     if chat == Config.SUPPORT_GROUP and message.reply_to_message:
         rt = message.reply_to_message
-        if rt.from_user.id != bot.get_me().id:
-            return
         target_user = db.get_reply_user(rt.message_id)
         if not target_user:
             return
@@ -1741,9 +1742,11 @@ def handle_messages(message):
             return bot.reply_to(message, "❌ Недостаточно прав!")
 
         try:
+            admin_nick = admin_pseudo(uid)
             bot.send_message(target_user,
-                "📩 <b>Новое сообщение</b>\n"
-                "<i>От администратора</i>")
+                f"📩 <b>Новое сообщение</b>\n"
+                f"<i>От администратора</i>\n"
+                f"👮 {admin_nick}")
             bot.copy_message(target_user, chat, message.message_id)
         except Exception as e:
             err = str(e)
@@ -1780,7 +1783,6 @@ def handle_messages(message):
 
         admin_id = db.get_ticket(uid)
 
-        # Нет активного диалога → предлагаем вызвать админа
         if not admin_id:
             kb = types.InlineKeyboardMarkup()
             kb.add(types.InlineKeyboardButton(
@@ -1803,8 +1805,10 @@ def handle_messages(message):
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"👤 {nick_tg(uid)} | <code>{uid}</code>\n"
                 f"👮 <b>Администратор:</b> {admin_pseudo(admin_id)}")
-            bot.copy_message(Config.SUPPORT_GROUP, chat, message.message_id)
             db.save_reply(header.message_id, uid)
+
+            copied = bot.copy_message(Config.SUPPORT_GROUP, chat, message.message_id)
+            db.save_reply(copied.message_id, uid)
         except Exception as e:
             print(f"[forward group] {e}")
 
