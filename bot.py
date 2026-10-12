@@ -813,7 +813,8 @@ def cb_take(call):
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("refuse_"))
 def cb_refuse(call):
-    admin_uid = call.from_user.id    if rank_of(admin_uid) < Config.MIN_TAKE:
+    admin_uid = call.from_user.id
+    if rank_of(admin_uid) < Config.MIN_TAKE:
         return bot.answer_callback_query(call.id, "❌ Недостаточно прав!", show_alert=True)
     try:
         target = int(call.data.split("_", 1)[1])
