@@ -146,6 +146,8 @@ class Storage:
                     muted_until REAL DEFAULT 0,
                     last_msg REAL DEFAULT 0,
                     messages INTEGER DEFAULT 0,
+                    rating_sum INTEGER DEFAULT 0,
+                    rating_count INTEGER DEFAULT 0,
                     joined TEXT
                 );
                 CREATE TABLE IF NOT EXISTS tickets (
@@ -249,6 +251,34 @@ class Storage:
 
     def set_warns(self, uid, count):
         self._exec("UPDATE users SET warns=? WHERE user_id=?", (count, uid))
+
+    def add_rating(self, uid, score):
+        self._exec(
+            "UPDATE users SET rating_sum = rating_sum + ?, rating_count = rating_count + 1 WHERE user_id=?",
+            (score, uid))
+
+    def user_rating(self, uid):
+        """Возвращает (средний, звёзды, текст)."""
+        if uid == Config.DEVELOPER_ID:
+            return 5.0, "⭐⭐⭐⭐⭐"
+        u = self.get_user(uid)
+        if not u["rating_count"]:
+            return 0, "—"
+        avg = round(u["rating_sum"] / u["rating_count"], 1)
+        stars = "⭐" * int(round(avg))
+        return avg, stars
+
+    def rating_str(self, uid):
+        """Готовая строка рейтинга."""
+        if uid == Config.DEVELOPER_ID:
+            return "⭐⭐⭐⭐⭐ (5.0)"
+        avg, stars = self.user_rating(uid)
+        return f"{stars} ({avg})" if avg else "—"
+
+    def get_all_admins(self):
+        return self._exec(
+            "SELECT * FROM users WHERE rank >= 1 ORDER BY rank DESC, user_id",
+            fetch="all") or []
 
     def create_ticket(self, uid, category):
         return self._exec(
@@ -677,10 +707,13 @@ def cb_take(call):
         f"👮 Бес: {admin_pseudo(admin_id)}\n"
         f"👤 Пользователь: {u['pseudo']}")
 
+    rating = db.rating_str(admin_id)
+
     try:
         bot.send_message(t["user_id"],
             f"✔️ <b>Бес тут!</b>\n"
-            f"👮 Твой бес: {admin_pseudo(admin_id)}\n\n"
+            f"👮 Твой бес: {admin_pseudo(admin_id)}\n"
+            f"⭐ Рейтинг: {rating}\n\n"
             f"❤️ Я здесь, чтобы выслушать и поддержать.\n\n"
             f"💭 Просто пиши — я всё вижу.",
             reply_markup=dialog_kb())
@@ -717,6 +750,14 @@ def cb_rate(call):
     uid = call.from_user.id
     score = int(call.data.split("_", 1)[1])
     stars = "⭐" * score
+
+    # Начисляем рейтинг последнему админу, который вёл диалог
+    last_ticket = db._exec(
+        "SELECT admin_id FROM tickets WHERE user_id=? AND admin_id IS NOT NULL ORDER BY ticket_id DESC LIMIT 1",
+        (uid,), "one")
+    if last_ticket and last_ticket["admin_id"]:
+        db.add_rating(last_ticket["admin_id"], score)
+
     bot.edit_message_text(
         f"✔️ Оценка {stars} — спасибо!\n\n"
         "<i>Если понадобится — я здесь.</i>",
@@ -816,7 +857,6 @@ def btn_tech(message):
     if db.get_open_tech_ticket(uid):
         return bot.send_message(uid, "⚠️ У вас уже есть активное обращение.")
     tid = db.create_tech_ticket(uid)
-    u = db.get_user(uid)
     bot.send_message(uid,
         f"✔️ <b>Обращение #{tid} принято!</b>\n\n"
         f"<i>Ответим как можно скорее.</i>\n"
@@ -969,7 +1009,7 @@ def cmd_help(message):
     text = "📖 <b>Команды</b>\n\n"
     text += "<b>👤 Для всех:</b>\n/start /help /stats /close /rules /info\n\n"
     if r >= 1:
-        text += "<b>🛠 Ранг 1+:</b>\n/check (reply)\n\n"
+        text += "<b>🛠 Ранг 1+:</b>\n/check (reply)\n/staff — состав\n\n"
     if r >= 5:
         text += "<b>🧑‍💼 Ранг 5+:</b>\n"
         text += "/setrole @user N #ник\n/removerole @user\n"
@@ -994,6 +1034,7 @@ def cmd_stats(message):
         target = uid
 
     u = db.get_user(target)
+    rating = db.rating_str(target)
     text = (
         f"📊 <b>Профиль</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
@@ -1002,9 +1043,40 @@ def cmd_stats(message):
         f"🔗 <b>Username:</b> {safe_username(target)}\n"
         f"🎖 <b>Ранг:</b> {rank_label(u['rank'])}\n"
         f"📛 <b>Псевдоним:</b> {u['nickname'] or u['pseudo'] or '—'}\n"
+        f"⭐ <b>Рейтинг:</b> {rating}\n"
         f"💬 <b>Сообщений:</b> {u['messages']}\n"
         f"⚠️ <b>Варнов:</b> {u['warns']}"
     )
+    bot.reply_to(message, text)
+
+
+@bot.message_handler(commands=["staff"])
+def cmd_staff(message):
+    if rank_of(message.from_user.id) < 1:
+        return bot.reply_to(message, "❌ Недостаточно прав!")
+
+    admins = db.get_all_admins()
+    if not admins:
+        return bot.reply_to(message, "📭 В составе пока никого нет.")
+
+    text = "🖤 <b>Состав администрации</b>\n"
+    text += "━━━━━━━━━━━━━━━━━━\n\n"
+
+    for a in admins:
+        uid = a["user_id"]
+        username = f"@{a['username']}" if a["username"] else "без username"
+        pseudo = a["nickname"] or "—"
+        rank_name = "Разработчик" if uid == Config.DEVELOPER_ID else RANKS.get(a["rank"], "—")
+        rating = db.rating_str(uid)
+
+        text += (
+            f"👤 <b>{username}</b>\n"
+            f"📛 Псевдоним: {pseudo}\n"
+            f"🎖 Должность: {rank_name}\n"
+            f"⭐ Рейтинг: {rating}\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+        )
+
     bot.reply_to(message, text)
 
 
@@ -1074,13 +1146,15 @@ def cmd_check(message):
     if not target:
         return
     u = db.get_user(target)
+    rating = db.rating_str(target)
     bot.reply_to(message,
         f"🔍 <b>Инфо</b>\n"
         f"👤 Ник: {nick_tg(target)}\n"
         f"🔗 Username: {safe_username(target)}\n"
         f"🆔 <code>{target}</code>\n"
         f"🎖 Ранг: {rank_label(u['rank'])}\n"
-        f"📛 Псевдоним: {u['nickname'] or u['pseudo'] or '—'}")
+        f"📛 Псевдоним: {u['nickname'] or u['pseudo'] or '—'}\n"
+        f"⭐ Рейтинг: {rating}")
 
 
 @bot.message_handler(commands=["setrole"])
