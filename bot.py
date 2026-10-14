@@ -22,9 +22,9 @@ class Config:
         "8975520882:AAHSCwym6c8p6v1XZDIvtIyR2-y7se_niGU"
     )
     DEVELOPER_ID = 963549015
-    SUPPORT_GROUP = -1004249566422
-    ANKETA_GROUP = -1004460147391
-    TECH_GROUP = -5528257493
+    SUPPORT_GROUP = -1004249566422      # группа бесов
+    ANKETA_GROUP = -1004460147391       # группа анкет
+    TECH_GROUP = -5528257493            # группа тех.отдела
     DB_PATH = "/tmp/secretary.db"
 
     RULES_URL = "https://telegra.ph/Pravila-dlya-polzovatelej-tesnyj-angel-07-24"
@@ -45,7 +45,6 @@ class Config:
     MIN_BOTSTATS = 8
     MIN_LOGS = 8
     MIN_BROADCAST = 8
-    MIN_SETPERM = 8
     MIN_CHECK = 1
 
 
@@ -71,22 +70,31 @@ ANKETA_OBSHENIE = [
     "Возраст (Берём с 14 лет).", "Часовой пояс от мск.", "Ваш пол.",
     "Как вы думаете, сможете ли вы поддержать беседу на отвлечённые темы, если пользователь молчит и отвечает односложно?",
     "Умеете ли вы шутить и разряжать обстановку, не переходя в пошлость или чёрный юмор?",
-    "Оценка вашей грамотности от 1 до 10.", "Готовы ли вы общаться на любые БЫТОВЫЕ темы?",
-    "Воспринимаете ли вы людей и ситуации серьезно?", "Готовы ли вы проявлять уважение к администрации?",
-    "Готовы ли вы выполнять норму 100 сообщений в неделю?", "Возникают ли трудности при общении с незнакомыми?",
-    "Готовы ли вы соблюдать конфиденциальность?", "Сможете ли отвлечь человека от грустных мыслей?",
-    "Как вы относитесь к флирту от пользователя?", "Что важнее: совет или весело провести время?",
-    "Придумайте 10 тем для холодного собеседника.", "Пользователь написал пошлую шутку — ваш ответ?",
+    "Оценка вашей грамотности от 1 до 10.",
+    "Готовы ли вы общаться на любые БЫТОВЫЕ темы?",
+    "Воспринимаете ли вы людей и ситуации серьезно?",
+    "Готовы ли вы проявлять уважение к администрации?",
+    "Готовы ли вы выполнять норму 100 сообщений в неделю?",
+    "Возникают ли трудности при общении с незнакомыми?",
+    "Готовы ли вы соблюдать конфиденциальность?",
+    "Сможете ли отвлечь человека от грустных мыслей?",
+    "Как вы относитесь к флирту от пользователя?",
+    "Что важнее: совет или весело провести время?",
+    "Придумайте 10 тем для холодного собеседника.",
+    "Пользователь написал пошлую шутку — ваш ответ?",
     "Вы нарушили правило, никто не заметил — действия?",
 ]
 
 ANKETA_PODDERZHKA = [
-    "Псевдоним/тег (Реальное имя запрещено).", "Возраст (с 14 лет).", "Часовой пояс от мск.", "Ваш пол.",
-    "Есть ли опыт в проектах поддержки?", "Знаете ли что такое активное слушание, валидация?",
+    "Псевдоним/тег (Реальное имя запрещено).", "Возраст (с 14 лет).",
+    "Часовой пояс от мск.", "Ваш пол.",
+    "Есть ли опыт в проектах поддержки?",
+    "Знаете ли что такое активное слушание, валидация?",
     "Оценка стрессоустойчивости от 1 до 10.", "Оценка грамотности от 1 до 10.",
     "Сохраняете ли спокойствие при агрессии?", "Воспринимаете ли людей серьёзно?",
-    "Уважение к администрации?", "Норма 100 сообщений в неделю?", "Трудности с людьми в истерике?",
-    "Конфиденциальность?", "Знаете запрещённые вопросы в кризисе?",
+    "Уважение к администрации?", "Норма 100 сообщений в неделю?",
+    "Трудности с людьми в истерике?", "Конфиденциальность?",
+    "Знаете запрещённые вопросы в кризисе?",
     "Что делать, если человек взял нож/таблетки?",
     "Слова поддержки на сообщение о 3-дневной апатии.",
     "Слова на сообщение про месть и интимные фото.",
@@ -234,12 +242,6 @@ class Storage:
 
     def pseudo_taken(self, pseudo):
         return self._exec("SELECT user_id FROM users WHERE pseudo=?", (pseudo,), "one") is not None
-
-    def get_ban(self, uid):
-        row = self._exec("SELECT * FROM users WHERE user_id=?", (uid,), "one")
-        if row and row["banned"]:
-            return row
-        return None
 
     def set_ban(self, uid, banned, reason=""):
         self._exec("UPDATE users SET banned=?, ban_reason=? WHERE user_id=?",
@@ -401,6 +403,8 @@ def safe_username(uid):
 
 
 def admin_pseudo(uid):
+    if not uid:
+        return "(#не назначен)"
     nick = db.get_user(uid)["nickname"]
     return f"(#{nick})" if nick else "(#Администратор)"
 
@@ -643,8 +647,7 @@ def post_new_ticket(uid, tid, need):
         f"👤 <b>Псевдоним:</b> {u['pseudo']}\n"
         f"🎂 <b>Возраст:</b> {u['age']}\n"
         f"🎯 <b>Нужно:</b> {need}\n"
-        f"🆔 <code>{uid}</code>\n"
-        f"🎫 <b>Заявка:</b> #{tid}"
+        f"🆔 <code>{uid}</code>"
     )
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("✅ Взять", callback_data=f"take_{tid}"))
@@ -667,13 +670,17 @@ def cb_take(call):
 
     db.set_ticket_admin(tid, admin_id)
     bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+
+    u = db.get_user(t["user_id"])
     bot.send_message(Config.SUPPORT_GROUP,
-        f"🖤 <b>Заявка #{tid} принята</b>\n"
-        f"👮 {call.from_user.first_name}")
+        f"🖤 <b>Заявка принята</b>\n"
+        f"👮 Бес: {admin_pseudo(admin_id)}\n"
+        f"👤 Пользователь: {u['pseudo']}")
 
     try:
         bot.send_message(t["user_id"],
-            f"✔️ <b>Бес тут!</b>\n\n"
+            f"✔️ <b>Бес тут!</b>\n"
+            f"👮 Твой бес: {admin_pseudo(admin_id)}\n\n"
             f"❤️ Я здесь, чтобы выслушать и поддержать.\n\n"
             f"💭 Просто пиши — я всё вижу.",
             reply_markup=dialog_kb())
@@ -692,6 +699,13 @@ def btn_close(message):
     if not t:
         return bot.send_message(uid, "⚠️ Нет активного обращения.")
     db.close_ticket(t["ticket_id"])
+
+    u = db.get_user(uid)
+    bot.send_message(Config.SUPPORT_GROUP,
+        f"🔚 <b>Обращение закрыто</b>\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"👤 Пользователь: {u['pseudo']}")
+
     bot.send_message(uid,
         "✔️ <b>Обращение завершено.</b>\n\n"
         "⭐ Оцени, пожалуйста, работу поддержки:")
@@ -744,12 +758,21 @@ def cb_change_yes(call):
     t = db.get_open_ticket(uid)
     if not t:
         return bot.answer_callback_query(call.id, "Нет активного обращения")
+
+    old_admin = t["admin_id"]
     db._exec("UPDATE tickets SET admin_id=NULL WHERE ticket_id=?", (t["ticket_id"],))
+
+    u = db.get_user(uid)
+    user_pseudo = u["pseudo"] or uid
+    old_admin_pseudo = admin_pseudo(old_admin) if old_admin else "(#не назначен)"
+
     try:
         bot.send_message(Config.SUPPORT_GROUP,
-            f"🔄 Заявка #{t['ticket_id']} — админ сменён пользователем.")
+            f"🔄 Пользователь {user_pseudo} сменил беса\n"
+            f"👮 Старый: {old_admin_pseudo}")
     except Exception:
         pass
+
     bot.edit_message_text(
         "Вы успешно сменили администратора, ожидайте когда вам напишет новый администратор",
         call.message.chat.id, call.message.message_id)
@@ -765,11 +788,11 @@ def btn_call(message):
     t = db.get_open_ticket(uid)
     if not t:
         return bot.send_message(uid, "⚠️ Нет активного обращения.")
+    u = db.get_user(uid)
     try:
         bot.send_message(Config.SUPPORT_GROUP,
             f"👑 <b>Пользователь зовёт беса</b>\n"
-            f"🎫 Заявка #{t['ticket_id']}\n"
-            f"👤 {db.get_user(uid)['pseudo']}")
+            f"👤 Пользователь: {u['pseudo']}")
     except Exception:
         pass
     bot.send_message(uid, "✅ Бес получил знак и скоро вернётся.")
@@ -793,6 +816,7 @@ def btn_tech(message):
     if db.get_open_tech_ticket(uid):
         return bot.send_message(uid, "⚠️ У вас уже есть активное обращение.")
     tid = db.create_tech_ticket(uid)
+    u = db.get_user(uid)
     bot.send_message(uid,
         f"✔️ <b>Обращение #{tid} принято!</b>\n\n"
         f"<i>Ответим как можно скорее.</i>\n"
@@ -977,7 +1001,7 @@ def cmd_stats(message):
         f"👤 <b>Имя:</b> {nick_tg(target)}\n"
         f"🔗 <b>Username:</b> {safe_username(target)}\n"
         f"🎖 <b>Ранг:</b> {rank_label(u['rank'])}\n"
-        f"📛 <b>Псевдоним:</b> {u['nickname'] or '—'}\n"
+        f"📛 <b>Псевдоним:</b> {u['nickname'] or u['pseudo'] or '—'}\n"
         f"💬 <b>Сообщений:</b> {u['messages']}\n"
         f"⚠️ <b>Варнов:</b> {u['warns']}"
     )
@@ -996,7 +1020,6 @@ def cmd_info(message):
 
 @bot.message_handler(commands=["close"])
 def cmd_close(message):
-    # Закрытие заявки через reply в группе
     if message.chat.id in (Config.SUPPORT_GROUP, Config.TECH_GROUP) and message.reply_to_message:
         rt = message.reply_to_message
         if rt.from_user.id != bot.get_me().id:
@@ -1009,23 +1032,28 @@ def cmd_close(message):
 
         if message.chat.id == Config.SUPPORT_GROUP:
             db.close_ticket(tid)
+            u = db.get_user(target)
             try:
                 bot.send_message(target,
-                    f"✔️ <b>Обращение #{tid} закрыто администратором.</b>\n\n"
-                    f"Главное меню:",
+                    "🔚 <b>Обращение закрыто</b>\n\n"
+                    "Главное меню:",
                     reply_markup=main_menu_kb())
             except Exception:
                 pass
+            bot.send_message(Config.SUPPORT_GROUP,
+                f"🔚 <b>Обращение закрыто</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"👮 Бес: {admin_pseudo(message.from_user.id)}\n"
+                f"👤 Пользователь: {u['pseudo'] or target}")
         else:
             db.close_tech_ticket(tid)
             try:
                 bot.send_message(target, f"✔️ Обращение #{tid} закрыто.")
             except Exception:
                 pass
-        bot.reply_to(message, f"✅ Обращение #{tid} закрыто")
+        bot.reply_to(message, "✅ Обращение закрыто")
         return
 
-    # Юзер в ЛС
     if message.chat.type == "private":
         uid = message.from_user.id
         t = db.get_open_ticket(uid)
@@ -1036,9 +1064,6 @@ def cmd_close(message):
             bot.send_message(uid, "❌ Нет активного обращения.")
 
 
-# ══════════════════════════════════════════════════════
-# /check
-# ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["check"])
 def cmd_check(message):
     if rank_of(message.from_user.id) < db.get_perm("check", 1):
@@ -1055,12 +1080,9 @@ def cmd_check(message):
         f"🔗 Username: {safe_username(target)}\n"
         f"🆔 <code>{target}</code>\n"
         f"🎖 Ранг: {rank_label(u['rank'])}\n"
-        f"📛 Псевдоним: {u['nickname'] or '—'}")
+        f"📛 Псевдоним: {u['nickname'] or u['pseudo'] or '—'}")
 
 
-# ══════════════════════════════════════════════════════
-# /setrole
-# ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["setrole"])
 def cmd_setrole(message):
     if not check_access(message, db.get_perm("setrole", Config.MIN_SETROLE)):
@@ -1108,14 +1130,12 @@ def cmd_setrole(message):
     db.set_rank(target, rank, nickname)
     db.add_log("setrole", message.from_user.id, target, f"rank={rank} nick={nickname}")
 
-    # В группе — новое сообщение
     bot.reply_to(message,
         f"👮 Администратор {safe_username(message.from_user.id)} "
         f"({nick_tg(message.from_user.id)}) назначил "
         f"{RANKS.get(rank, 'Неизвестно')} "
         f"{safe_username(target)} ({nick_tg(target)})")
 
-    # В ЛС юзеру — новое сообщение
     try:
         bot.send_message(target,
             f"Вас назначили на {RANKS.get(rank, 'Неизвестно')} "
@@ -1124,9 +1144,6 @@ def cmd_setrole(message):
         pass
 
 
-# ══════════════════════════════════════════════════════
-# /removerole
-# ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["removerole"])
 def cmd_removerole(message):
     if not check_access(message, db.get_perm("removerole", Config.MIN_REMOVEROLE)):
@@ -1140,14 +1157,12 @@ def cmd_removerole(message):
     db.remove_role(target)
     db.add_log("removerole", message.from_user.id, target, f"old_rank={old_rank}")
 
-    # В группе
     bot.reply_to(message,
         f"👮 Администратор {safe_username(message.from_user.id)} "
         f"({nick_tg(message.from_user.id)}) снял роль с "
         f"{safe_username(target)} ({nick_tg(target)})\n"
         f"🎭 Бывший ранг: {old_rank}")
 
-    # В ЛС
     try:
         bot.send_message(target,
             f"С вас сняли роль.\n"
@@ -1156,9 +1171,6 @@ def cmd_removerole(message):
         pass
 
 
-# ══════════════════════════════════════════════════════
-# /ban /unban /warn /unwarn /kick /mute /unmute
-# ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["ban"])
 def cmd_ban(message):
     if not check_access(message, db.get_perm("ban", Config.MIN_BAN)):
@@ -1194,7 +1206,10 @@ def cmd_warn(message):
     bot.reply_to(message, f"⚠️ {nick_tg(target)} — варн {warns}/3")
     if warns >= 3:
         db.set_ban(target, 1, "3 варна")
-        bot.send_message(Config.SUPPORT_GROUP, f"🚫 Автобан {nick_tg(target)} за 3 варна")
+        try:
+            bot.send_message(Config.SUPPORT_GROUP, f"🚫 Автобан {nick_tg(target)} за 3 варна")
+        except Exception:
+            pass
 
 
 @bot.message_handler(commands=["unwarn"])
@@ -1243,9 +1258,6 @@ def cmd_unmute(message):
     bot.reply_to(message, f"🔊 {nick_tg(target)} размучен")
 
 
-# ══════════════════════════════════════════════════════
-# /botstats /logs /broadcast
-# ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["botstats"])
 def cmd_botstats(message):
     if rank_of(message.from_user.id) < db.get_perm("botstats", Config.MIN_BOTSTATS):
@@ -1319,9 +1331,12 @@ def handle_messages(message):
         if not r:
             return
         target = r["user_id"]
-        tid = r["ticket_id"]
+        admin_id = uid
         try:
-            bot.send_message(target, f"✔️ <b>Ответ на обращение #{tid}</b>")
+            bot.send_message(target,
+                f"📩 <b>Новое сообщение</b>\n"
+                f"От администратора\n"
+                f"👮 {admin_pseudo(admin_id)}")
             bot.copy_message(target, chat, message.message_id)
         except Exception as e:
             bot.reply_to(message, f"❌ Не доставлено: {e}")
@@ -1336,9 +1351,12 @@ def handle_messages(message):
         if not r:
             return
         target = r["user_id"]
-        tid = r["ticket_id"]
+        admin_id = uid
         try:
-            bot.send_message(target, f"✔️ <b>Ответ на обращение #{tid}</b>")
+            bot.send_message(target,
+                f"📩 <b>Новое сообщение</b>\n"
+                f"От администратора\n"
+                f"👮 {admin_pseudo(admin_id)}")
             bot.copy_message(target, chat, message.message_id)
         except Exception as e:
             bot.reply_to(message, f"❌ Не доставлено: {e}")
@@ -1359,9 +1377,12 @@ def handle_messages(message):
         t = db.get_open_ticket(uid)
         if t:
             try:
+                admin_nick = admin_pseudo(t["admin_id"]) if t["admin_id"] else "(#не назначен)"
                 sent = bot.send_message(Config.SUPPORT_GROUP,
                     f"📩 <b>Сообщение от {u['pseudo'] or uid}</b>\n"
-                    f"🎫 Заявка #{t['ticket_id']}")
+                    f"━━━━━━━━━━━━━━━━━━\n"
+                    f"🆔 <code>{uid}</code>\n"
+                    f"👮 Администратор пользователя: {admin_nick}")
                 bot.copy_message(Config.SUPPORT_GROUP, chat, message.message_id)
                 db.save_reply(sent.message_id, uid, t["ticket_id"])
             except Exception as e:
