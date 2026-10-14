@@ -24,7 +24,7 @@ class Config:
     DEVELOPER_ID = 963549015
     SUPPORT_GROUP = -1004249566422      # группа бесов
     ANKETA_GROUP = -1004460147391       # группа анкет
-    TECH_GROUP = -5528257493            # группа тех.отдела
+    TECH_GROUP = -1004437354329         # группа тех.отдела
     DB_PATH = "/tmp/secretary.db"
 
     RULES_URL = "https://telegra.ph/Pravila-dlya-polzovatelej-tesnyj-angel-07-24"
@@ -258,7 +258,6 @@ class Storage:
             (score, uid))
 
     def user_rating(self, uid):
-        """Возвращает (средний, звёзды, текст)."""
         if uid == Config.DEVELOPER_ID:
             return 5.0, "⭐⭐⭐⭐⭐"
         u = self.get_user(uid)
@@ -269,7 +268,6 @@ class Storage:
         return avg, stars
 
     def rating_str(self, uid):
-        """Готовая строка рейтинга."""
         if uid == Config.DEVELOPER_ID:
             return "⭐⭐⭐⭐⭐ (5.0)"
         avg, stars = self.user_rating(uid)
@@ -393,6 +391,7 @@ except Exception as e:
     print(f"⚠️ Webhook: {e}")
 
 talk_sessions = {}
+tech_sessions = {}
 anketa_sessions = {}
 
 
@@ -619,6 +618,14 @@ def btn_talk(message):
     uid = message.from_user.id
     if db.get_open_ticket(uid):
         return bot.send_message(uid, "⚠️ У вас уже есть активный запрос!")
+
+    u = db.get_user(uid)
+
+    # Если псевдоним и возраст уже есть — пропускаем регистрацию
+    if u["pseudo"] and u["age"]:
+        talk_sessions[uid] = {"step": 2, "pseudo": u["pseudo"], "age": u["age"]}
+        return bot.send_message(uid, "💭 Что тебе нужно?", reply_markup=need_kb())
+
     talk_sessions[uid] = {"step": 0, "pseudo": None, "age": None}
     bot.send_message(uid,
         "💭 <b>Скрыть истинное имя (Псевдоним)</b>\n\n"
@@ -644,8 +651,13 @@ def talk_step(message):
         if not text.isdigit():
             return bot.send_message(uid, "Используйте только цифры!")
         state["age"] = text
+        db.set_user(uid, pseudo=state["pseudo"], age=state["age"])
         state["step"] = 2
         return bot.send_message(uid, "💭 Что тебе нужно?", reply_markup=need_kb())
+
+    if state["step"] == 2:
+        # Если по какой-то причине написал текст, а не нажал кнопку
+        return bot.send_message(uid, "Нажми на кнопку ниже 👇", reply_markup=need_kb())
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("need_"))
@@ -656,7 +668,12 @@ def cb_need(call):
     need = call.data.split("_", 1)[1]
     state = talk_sessions.pop(uid)
 
-    db.set_user(uid, pseudo=state["pseudo"], age=state["age"], need=need)
+    # Сохраняем pseudo и age, если их ещё не было
+    if state["pseudo"]:
+        db.set_user(uid, pseudo=state["pseudo"], age=state["age"], need=need)
+    else:
+        db.set_user(uid, need=need)
+
     tid = db.create_ticket(uid, need)
 
     bot.edit_message_text(
@@ -751,7 +768,6 @@ def cb_rate(call):
     score = int(call.data.split("_", 1)[1])
     stars = "⭐" * score
 
-    # Начисляем рейтинг последнему админу, который вёл диалог
     last_ticket = db._exec(
         "SELECT admin_id FROM tickets WHERE user_id=? AND admin_id IS NOT NULL ORDER BY ticket_id DESC LIMIT 1",
         (uid,), "one")
@@ -854,20 +870,66 @@ def btn_rating(message):
 @bot.message_handler(func=lambda m: m.chat.type == "private" and m.text == "🧑‍💻 Тех поддержка")
 def btn_tech(message):
     uid = message.from_user.id
+
+    # Проверяем псевдоним
+    u = db.get_user(uid)
+    if not u["pseudo"] or not u["age"]:
+        tech_sessions[uid] = {"step": 0, "pseudo": None, "age": None}
+        return bot.send_message(uid,
+            "💭 <b>Прежде чем начать</b>\n\n"
+            "Придумай псевдоним — только буквы, через #. Пример: <code>#бес</code>")
+
     if db.get_open_tech_ticket(uid):
         return bot.send_message(uid, "⚠️ У вас уже есть активное обращение.")
+
+    create_tech_forward(uid)
+
+
+def create_tech_forward(uid):
+    """Создаёт обращение в тех.группе."""
     tid = db.create_tech_ticket(uid)
+    u = db.get_user(uid)
+
     bot.send_message(uid,
         f"✔️ <b>Обращение #{tid} принято!</b>\n\n"
         f"<i>Ответим как можно скорее.</i>\n"
         f"<i>Чтобы выйти из диалога, нажми</i> <b>«Разорвать связь»</b>.")
+
     try:
         sent = bot.send_message(Config.TECH_GROUP,
-            f"🧑‍💻 <b>Тех.обращение #{tid}</b>\n"
+            f"🆕 <b>Новый запрос</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"👤 <b>Псевдоним:</b> {u['pseudo']}\n"
+            f"🎂 <b>Возраст:</b> {u['age']}\n"
+            f"🎯 <b>Нужно:</b> Тех.поддержка\n"
             f"🆔 <code>{uid}</code>")
         db.save_reply(sent.message_id, uid, tid)
     except Exception as e:
         print(f"[tech] {e}")
+
+
+@bot.message_handler(func=lambda m: m.chat.type == "private" and m.from_user.id in tech_sessions,
+                     content_types=["text"])
+def tech_registration(message):
+    uid = message.from_user.id
+    state = tech_sessions[uid]
+    text = (message.text or "").strip()
+
+    if state["step"] == 0:
+        pseudo, err = parse_pseudo(text)
+        if err:
+            return bot.send_message(uid, err)
+        state["pseudo"] = pseudo
+        state["step"] = 1
+        return bot.send_message(uid, "🙂 Сколько тебе лет?")
+
+    if state["step"] == 1:
+        if not text.isdigit():
+            return bot.send_message(uid, "Используйте только цифры!")
+        state["age"] = text
+        db.set_user(uid, pseudo=state["pseudo"], age=state["age"])
+        del tech_sessions[uid]
+        create_tech_forward(uid)
 
 
 # ══════════════════════════════════════════════════════
@@ -1468,8 +1530,8 @@ def handle_messages(message):
         if tt:
             try:
                 sent = bot.send_message(Config.TECH_GROUP,
-                    f"📩 <b>Сообщение</b>\n"
-                    f"🎫 Обращение #{tt['ticket_id']}\n"
+                    f"📩 <b>Сообщение от {u['pseudo'] or uid}</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━\n"
                     f"🆔 <code>{uid}</code>")
                 bot.copy_message(Config.TECH_GROUP, chat, message.message_id)
                 db.save_reply(sent.message_id, uid, tt["ticket_id"])
