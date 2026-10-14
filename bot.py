@@ -19,12 +19,12 @@ from telebot import types
 class Config:
     TOKEN = os.environ.get(
         "BOT_TOKEN",
-        "8975520882:AAHSCwym6c8p6v1XZDIvtIyR2-y7se_niGU"
+        "8721804861:AAHcUmRNRqdBIi3-LIJnvzzd8tWnyvdZPiQ"
     )
     DEVELOPER_ID = 963549015
-    SUPPORT_GROUP = -1004249566422      # группа бесов
-    ANKETA_GROUP = -1004460147391       # группа анкет
-    TECH_GROUP = -1004437354329         # группа тех.отдела
+    SUPPORT_GROUP = -1004471681505
+    ANKETA_GROUP = -1004460147391
+    TECH_GROUP = -1004437354329
     DB_PATH = "/tmp/secretary.db"
 
     RULES_URL = "https://telegra.ph/Pravila-dlya-polzovatelej-tesnyj-angel-07-24"
@@ -412,6 +412,10 @@ def rank_label(r):
     return f"🛡 {RANKS.get(r, 'Неизвестно')}"
 
 
+def is_banned(uid):
+    return bool(db.get_user(uid)["banned"])
+
+
 def nick_tg(uid):
     try:
         u = bot.get_chat(uid)
@@ -564,6 +568,9 @@ def cmd_start(message):
     uid = message.from_user.id
     u = db.get_user(uid)
 
+    if u["banned"]:
+        return bot.send_message(uid, "🚫 Вы заблокированы в боте.")
+
     if not u["agreement"]:
         agreement = db.get_setting("agreement",
             "Прежде чем продолжить, ознакомься с правилами использования бота.")
@@ -601,6 +608,8 @@ def send_welcome(uid):
 @bot.callback_query_handler(func=lambda c: c.data == "accept")
 def cb_accept(call):
     uid = call.from_user.id
+    if is_banned(uid):
+        return bot.answer_callback_query(call.id, "Вы заблокированы")
     db.set_user(uid, agreement=1)
     try:
         bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -616,12 +625,12 @@ def cb_accept(call):
 @bot.message_handler(func=lambda m: m.chat.type == "private" and m.text == "💬 Поговорить с бесом")
 def btn_talk(message):
     uid = message.from_user.id
+    if is_banned(uid):
+        return bot.send_message(uid, "🚫 Вы заблокированы в боте.")
     if db.get_open_ticket(uid):
         return bot.send_message(uid, "⚠️ У вас уже есть активный запрос!")
 
     u = db.get_user(uid)
-
-    # Если псевдоним и возраст уже есть — пропускаем регистрацию
     if u["pseudo"] and u["age"]:
         talk_sessions[uid] = {"step": 2, "pseudo": u["pseudo"], "age": u["age"]}
         return bot.send_message(uid, "💭 Что тебе нужно?", reply_markup=need_kb())
@@ -636,6 +645,8 @@ def btn_talk(message):
                      content_types=["text"])
 def talk_step(message):
     uid = message.from_user.id
+    if is_banned(uid):
+        return bot.send_message(uid, "🚫 Вы заблокированы в боте.")
     state = talk_sessions[uid]
     text = (message.text or "").strip()
 
@@ -656,19 +667,19 @@ def talk_step(message):
         return bot.send_message(uid, "💭 Что тебе нужно?", reply_markup=need_kb())
 
     if state["step"] == 2:
-        # Если по какой-то причине написал текст, а не нажал кнопку
         return bot.send_message(uid, "Нажми на кнопку ниже 👇", reply_markup=need_kb())
 
 
 @bot.callback_query_handler(func=lambda c: c.data.startswith("need_"))
 def cb_need(call):
     uid = call.from_user.id
+    if is_banned(uid):
+        return bot.answer_callback_query(call.id, "Вы заблокированы")
     if uid not in talk_sessions:
         return bot.answer_callback_query(call.id, "Анкета не активна")
     need = call.data.split("_", 1)[1]
     state = talk_sessions.pop(uid)
 
-    # Сохраняем pseudo и age, если их ещё не было
     if state["pseudo"]:
         db.set_user(uid, pseudo=state["pseudo"], age=state["age"], need=need)
     else:
@@ -745,6 +756,8 @@ def cb_take(call):
 @bot.message_handler(func=lambda m: m.chat.type == "private" and m.text == "❌ Разорвать связь")
 def btn_close(message):
     uid = message.from_user.id
+    if is_banned(uid):
+        return bot.send_message(uid, "🚫 Вы заблокированы в боте.")
     t = db.get_open_ticket(uid)
     if not t:
         return bot.send_message(uid, "⚠️ Нет активного обращения.")
@@ -765,14 +778,35 @@ def btn_close(message):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("rate_"))
 def cb_rate(call):
     uid = call.from_user.id
+    if is_banned(uid):
+        return bot.answer_callback_query(call.id, "Вы заблокированы")
     score = int(call.data.split("_", 1)[1])
     stars = "⭐" * score
 
+    # Находим последнего админа, который вёл диалог
     last_ticket = db._exec(
-        "SELECT admin_id FROM tickets WHERE user_id=? AND admin_id IS NOT NULL ORDER BY ticket_id DESC LIMIT 1",
+        "SELECT admin_id, ticket_id FROM tickets WHERE user_id=? AND admin_id IS NOT NULL ORDER BY ticket_id DESC LIMIT 1",
         (uid,), "one")
+
     if last_ticket and last_ticket["admin_id"]:
-        db.add_rating(last_ticket["admin_id"], score)
+        admin_id = last_ticket["admin_id"]
+        db.add_rating(admin_id, score)
+        db.add_log("rating", uid, admin_id, f"{score}⭐")
+
+        # Псевдоним того, кто оставил отзыв
+        reviewer = db.get_user(uid)
+        reviewer_pseudo = reviewer["pseudo"] or f"ID{uid}"
+
+        # Уведомление админу в ЛС
+        try:
+            bot.send_message(admin_id,
+                f"⭐ <b>Вам оставили отзыв!</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"👤 От: {reviewer_pseudo}\n"
+                f"⭐ Оценка: {stars} ({score}/5)\n"
+                f"🎫 Обращение: #{last_ticket['ticket_id']}")
+        except Exception as e:
+            print(f"[rating notify] {e}")
 
     bot.edit_message_text(
         f"✔️ Оценка {stars} — спасибо!\n\n"
@@ -788,6 +822,8 @@ def cb_rate(call):
 @bot.message_handler(func=lambda m: m.chat.type == "private" and m.text == "🔄 Сменить беса")
 def btn_change(message):
     uid = message.from_user.id
+    if is_banned(uid):
+        return bot.send_message(uid, "🚫 Вы заблокированы в боте.")
     t = db.get_open_ticket(uid)
     if not t:
         return bot.send_message(uid, "⚠️ Нет активного обращения.")
@@ -812,6 +848,8 @@ def cb_change_no(call):
 @bot.callback_query_handler(func=lambda c: c.data == "change_yes")
 def cb_change_yes(call):
     uid = call.from_user.id
+    if is_banned(uid):
+        return bot.answer_callback_query(call.id, "Вы заблокированы")
     t = db.get_open_ticket(uid)
     if not t:
         return bot.answer_callback_query(call.id, "Нет активного обращения")
@@ -842,6 +880,8 @@ def cb_change_yes(call):
 @bot.message_handler(func=lambda m: m.chat.type == "private" and m.text == "👑 Позвать беса")
 def btn_call(message):
     uid = message.from_user.id
+    if is_banned(uid):
+        return bot.send_message(uid, "🚫 Вы заблокированы в боте.")
     t = db.get_open_ticket(uid)
     if not t:
         return bot.send_message(uid, "⚠️ Нет активного обращения.")
@@ -858,6 +898,8 @@ def btn_call(message):
 @bot.message_handler(func=lambda m: m.chat.type == "private" and m.text == "⭐ Поставить оценку")
 def btn_rating(message):
     uid = message.from_user.id
+    if is_banned(uid):
+        return bot.send_message(uid, "🚫 Вы заблокированы в боте.")
     t = db.get_open_ticket(uid)
     if not t:
         return bot.send_message(uid, "⚠️ Нет активного обращения.")
@@ -870,8 +912,9 @@ def btn_rating(message):
 @bot.message_handler(func=lambda m: m.chat.type == "private" and m.text == "🧑‍💻 Тех поддержка")
 def btn_tech(message):
     uid = message.from_user.id
+    if is_banned(uid):
+        return bot.send_message(uid, "🚫 Вы заблокированы в боте.")
 
-    # Проверяем псевдоним
     u = db.get_user(uid)
     if not u["pseudo"] or not u["age"]:
         tech_sessions[uid] = {"step": 0, "pseudo": None, "age": None}
@@ -886,7 +929,6 @@ def btn_tech(message):
 
 
 def create_tech_forward(uid):
-    """Создаёт обращение в тех.группе."""
     tid = db.create_tech_ticket(uid)
     u = db.get_user(uid)
 
@@ -912,6 +954,8 @@ def create_tech_forward(uid):
                      content_types=["text"])
 def tech_registration(message):
     uid = message.from_user.id
+    if is_banned(uid):
+        return bot.send_message(uid, "🚫 Вы заблокированы в боте.")
     state = tech_sessions[uid]
     text = (message.text or "").strip()
 
@@ -938,6 +982,8 @@ def tech_registration(message):
 @bot.message_handler(func=lambda m: m.chat.type == "private" and m.text == "🖤 Стать бесом")
 def btn_become(message):
     uid = message.from_user.id
+    if is_banned(uid):
+        return bot.send_message(uid, "🚫 Вы заблокированы в боте.")
     if db.has_pending_anketa(uid):
         return bot.send_message(uid, "⚠️ Вы уже отправляете анкету!")
 
@@ -953,6 +999,8 @@ def btn_become(message):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("ank_"))
 def cb_anketa_type(call):
     uid = call.from_user.id
+    if is_banned(uid):
+        return bot.answer_callback_query(call.id, "Вы заблокированы")
     key = call.data.split("_", 1)[1]
     if key not in ANKETA_TYPES:
         return bot.answer_callback_query(call.id, "Ошибка")
@@ -975,11 +1023,43 @@ def cb_anketa_type(call):
                      content_types=["text", "photo", "video", "document"])
 def anketa_step(message):
     uid = message.from_user.id
+    if is_banned(uid):
+        return bot.send_message(uid, "🚫 Вы заблокированы в боте.")
     state = anketa_sessions[uid]
     title, questions = ANKETA_TYPES[state["type"]]
 
+    text = (message.text or "").strip() if message.text else ""
+
+    if text and len(text) < 3:
+        return bot.send_message(uid,
+            "⚠️ Ответ слишком короткий. Напиши подробнее (минимум 3 символа).")
+
+    if text:
+        q_lower = questions[state["step"]].lower()
+
+        if "возраст" in q_lower:
+            if not text.isdigit():
+                return bot.send_message(uid, "⚠️ Возраст — только цифры!")
+            age = int(text)
+            if age < 14 or age > 100:
+                return bot.send_message(uid, "⚠️ Возраст от 14 до 100")
+
+        if "оценка" in q_lower or "оцените" in q_lower:
+            if not text.isdigit() or not (1 <= int(text) <= 10):
+                return bot.send_message(uid, "⚠️ Оценка — число от 1 до 10!")
+
+        if "часовой пояс" in q_lower:
+            if not re.match(r"^[+-]?\d{1,2}$", text):
+                return bot.send_message(uid,
+                    "⚠️ Часовой пояс укажи числом. Пример: +2, -3, 0")
+
+        if "псевдоним" in q_lower or "тег" in q_lower:
+            if not text.startswith("#"):
+                return bot.send_message(uid,
+                    "⚠️ Псевдоним через #. Пример: #бес")
+
     if message.text:
-        state["answers"].append(message.text)
+        state["answers"].append(text)
     elif message.photo:
         state["answers"].append("[фото]")
     elif message.video:
@@ -1066,6 +1146,8 @@ def cb_anketa_decide(call):
 # ══════════════════════════════════════════════════════
 @bot.message_handler(commands=["help"])
 def cmd_help(message):
+    if message.chat.type == "private" and is_banned(message.from_user.id):
+        return
     uid = message.from_user.id
     r = rank_of(uid)
     text = "📖 <b>Команды</b>\n\n"
@@ -1083,6 +1165,8 @@ def cmd_help(message):
 
 @bot.message_handler(commands=["stats"])
 def cmd_stats(message):
+    if message.chat.type == "private" and is_banned(message.from_user.id):
+        return
     uid = message.from_user.id
     arg = message.text.partition(" ")[2].strip()
 
@@ -1114,6 +1198,8 @@ def cmd_stats(message):
 
 @bot.message_handler(commands=["staff"])
 def cmd_staff(message):
+    if message.chat.type == "private" and is_banned(message.from_user.id):
+        return
     if rank_of(message.from_user.id) < 1:
         return bot.reply_to(message, "❌ Недостаточно прав!")
 
@@ -1144,11 +1230,15 @@ def cmd_staff(message):
 
 @bot.message_handler(commands=["rules"])
 def cmd_rules(message):
+    if message.chat.type == "private" and is_banned(message.from_user.id):
+        return
     bot.reply_to(message, f"📜 <a href='{Config.RULES_URL}'>Правила</a>")
 
 
 @bot.message_handler(commands=["info"])
 def cmd_info(message):
+    if message.chat.type == "private" and is_banned(message.from_user.id):
+        return
     bot.reply_to(message, "🤖 Бот анонимной поддержки «Разговоры по душам».")
 
 
@@ -1190,6 +1280,8 @@ def cmd_close(message):
 
     if message.chat.type == "private":
         uid = message.from_user.id
+        if is_banned(uid):
+            return bot.send_message(uid, "🚫 Вы заблокированы в боте.")
         t = db.get_open_ticket(uid)
         if t:
             db.close_ticket(t["ticket_id"])
@@ -1231,11 +1323,11 @@ def cmd_setrole(message):
         target = resolve_user(message, "")
         parts = text.split(maxsplit=1)
         if not parts:
-            return bot.reply_to(message, "Выберите номер ранга (1-8)")
+            return bot.reply_to(message, "Выберите номер ранга (1-8) или 100")
         try:
             rank = int(parts[0])
         except ValueError:
-            return bot.reply_to(message, "❌ Ранг 1–8")
+            return bot.reply_to(message, "❌ Ранг 1–8 или 100")
         if len(parts) > 1 and parts[1].strip().startswith("#"):
             nickname = parts[1].strip()[1:]
     else:
@@ -1246,18 +1338,21 @@ def cmd_setrole(message):
         if not target:
             return bot.reply_to(message, "Пользователь не найден")
         if len(parts) < 2:
-            return bot.reply_to(message, "Укажите ранг (1-8)")
+            return bot.reply_to(message, "Укажите ранг (1-8) или 100")
         try:
             rank = int(parts[1])
         except ValueError:
-            return bot.reply_to(message, "❌ Ранг 1–8")
+            return bot.reply_to(message, "❌ Ранг 1–8 или 100")
         if len(parts) > 2 and parts[2].strip().startswith("#"):
             nickname = parts[2].strip()[1:]
 
     if not nickname:
         return bot.reply_to(message, "Укажите #псевдоним")
-    if not (1 <= rank <= 8):
-        return bot.reply_to(message, "❌ Ранг 1–8")
+    if not ((1 <= rank <= 8) or rank == 100):
+        return bot.reply_to(message, "❌ Ранг 1–8 или 100")
+
+    if rank == 100 and message.from_user.id != Config.DEVELOPER_ID:
+        return bot.reply_to(message, "❌ Только разработчик может выдать ранг 100")
 
     my = rank_of(message.from_user.id)
     if rank >= my and message.from_user.id != Config.DEVELOPER_ID:
@@ -1315,7 +1410,12 @@ def cmd_ban(message):
     if not target:
         return bot.reply_to(message, "❌ Пользователь не найден")
     db.set_ban(target, 1, "по решению администрации")
+    db.add_log("ban", message.from_user.id, target)
     bot.reply_to(message, f"🚫 {nick_tg(target)} забанен")
+    try:
+        bot.send_message(target, "🚫 Вы заблокированы в боте.")
+    except Exception:
+        pass
 
 
 @bot.message_handler(commands=["unban"])
@@ -1326,7 +1426,12 @@ def cmd_unban(message):
     if not target:
         return bot.reply_to(message, "❌ Пользователь не найден")
     db.set_ban(target, 0, "")
+    db.add_log("unban", message.from_user.id, target)
     bot.reply_to(message, f"✅ {nick_tg(target)} разбанен")
+    try:
+        bot.send_message(target, "✅ Вы разблокированы.")
+    except Exception:
+        pass
 
 
 @bot.message_handler(commands=["warn"])
@@ -1502,6 +1607,10 @@ def handle_messages(message):
     if message.chat.type == "private":
         u = db.get_user(uid)
         if u["banned"]:
+            try:
+                bot.send_message(uid, "🚫 Вы заблокированы в боте.")
+            except Exception:
+                pass
             return
         if is_flood(uid):
             return
